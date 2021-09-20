@@ -6,6 +6,7 @@ from hoshino import Service,R,priv,util
 from hoshino.typing import MessageSegment,CQEvent, HoshinoBot
 from hoshino.util import FreqLimiter,pic2b64
 from urllib.request import urlopen
+from urllib.parse import urlencode
 import hoshino
 import asyncio
 import time
@@ -22,15 +23,30 @@ import io
 import base64
 from PIL import Image
 
+# Github-@lulu666lulu https://github.com/Azure99/GenshinPlayerQuery/issues/20
+# '''
+# {body:"",query:{"action_ticket": undefined, "game_biz": "hk4e_cn”}}
+# 对应 https://api-takumi.mihoyo.com/binding/api/getUserGameRolesByCookie?game_biz=hk4e_cn //查询米哈游账号下绑定的游戏(game_biz可留空)
+# {body:"",query:{"uid": 12345(被查询账号米哈游uid)}}
+# 对应 https://api-takumi.mihoyo.com/game_record/app/card/wapi/getGameRecordCard?uid=
+# {body:"",query:{'role_id': '查询账号的uid(游戏里的)' ,'server': '游戏服务器'}}
+# 对应 https://api-takumi.mihoyo.com/game_record/app/genshin/api/index?server= server信息 &role_id= 游戏uid
+# {body:"",query:{'role_id': '查询账号的uid(游戏里的)' , 'schedule_type': 1(我这边只看到出现过1和2), 'server': 'cn_gf01'}}
+# 对应 https://api-takumi.mihoyo.com/game_record/app/genshin/api/spiralAbyss?schedule_type=1&server= server信息 &role_id= 游戏uid
+# {body:"",query:{game_id: 2(目前我知道有崩坏3是1原神是2)}}
+# 对应 https://api-takumi.mihoyo.com/game_record/app/card/wapi/getAnnouncement?game_id=    这个是公告api
+# b=body q=query
+# 其中b只在post的时候有内容，q只在get的时候有内容
+# '''
 
 #源码来源于https://github.com/Womsxd/YuanShen_User_Info
 sv = Service('ysInfo', visible=True, manage_priv=priv.ADMIN, enable_on_default=True)
 bot = get_bot()
 
-mhyVersion = "2.9.0"
-salt = "w5k9n3aqhoaovgw25l373ee18nsazydo" # Github-@Azure99
+mhyVersion = "2.11.1"
+salt = "xV8v4Qu54lUKrEYFZkJhB8cuOh9Asafs" # Github-@lulu666lulu
 client_type = "5"
-cache_Cookie = "" #自行获取
+cache_Cookie = "_guid=227471054.4257066864067721000.1628484833057.5515; UM_distinctid=17b29428fe228d-0d6360bb6f1442-45410429-1fa400-17b29428fe3231; _ga=GA1.2.339487481.1628484836; _MHYUUID=507874ae-f95c-4c23-810e-60f599a8cc59; CNZZDATA1275023096=1275660519-1628482653-%7C1630894650; _gid=GA1.2.735750044.1630897505; ltoken=UAGB86gbitmCEqJkNTZZoFZebAOjQ3hrhtLOP54T; ltuid=5755149; cookie_token=NnxS3r5YpFkuXSLI7oMy3GuhNcgALlIMeWrm5HnI; account_id=5755149; monitor_count=7" #自行获取
 
 FILE_PATH = os.path.dirname(__file__)
 FONTS_PATH = os.path.join(FILE_PATH,'fonts')
@@ -75,27 +91,66 @@ def split_text(content):
     drow_height = total_lines * line_height
     return allText, total_height, line_height, drow_height
 
-def md5(text):
-    md5 = hashlib.md5()
-    md5.update(text.encode())
-    return md5.hexdigest()
+def __md5__(text):
+    _md5 = hashlib.md5()
+    _md5.update(text.encode())
+    return _md5.hexdigest()
 
-
-def DSGet():
+def __get_ds__(query, body=None):
+    if body:
+        body = json.dumps(body)
     n = salt
     i = str(int(time.time()))
-    r = ''.join(random.sample(string.ascii_lowercase + string.digits, 6))
-    c = md5("salt=" + n + "&t=" + i + "&r=" + r)
+    r = str(random.randint(100000, 200000))
+    q = '&'.join([f'{k}={v}' for k, v in query.items()])
+    c = __md5__("salt=" + n + "&t=" + i + "&r=" + r + '&b=' + (body or '') + '&q=' + q)
     return i + "," + r + "," + c
+
+def request_data(uid = 0, api='index', character_ids=None):
+    server = 'cn_gf01'
+    if uid[0] == "5":
+        server = 'cn_qd01'
+
+    headers = {
+        'Accept': 'application/json, text/plain, */*',
+        "User-Agent":"Mozilla/5.0 (iPhone; CPU iPhone OS 13_2_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) miHoYoBBS/2.11.1",
+        "Referer": "https://webstatic.mihoyo.com/",
+        "x-rpc-app_version": mhyVersion,
+        "x-rpc-client_type": client_type,
+        "DS": "",
+        'Cookie': cache_Cookie
+    }
+
+    params = {"role_id": uid, "server": server}
+
+    json_data = None
+    fn = requests.get
+    base_url = 'https://api-takumi.mihoyo.com/game_record/app/genshin/api/%s'
+    url = base_url % api + '?'
+    if api == 'index':
+        url += urlencode(params)
+    elif api == 'spiralAbyss':
+        params['schedule_type'] = '1'
+        url += urlencode(params)
+    elif api == 'character':
+        url = 'https://api-takumi.mihoyo.com/game_record/app/genshin/api/character'
+        fn = requests.post
+        json_data = {"character_ids": character_ids,"role_id": uid, "server": server}
+        print(json_data)
+        params = {}
+
+    headers['DS'] = __get_ds__(params, json_data)
+    res = fn(url=url, headers=headers, json=json_data)
+    return res.text
 
 
 
 def GetInfo(Uid, ServerID):
     req = requests.get(
-        url="https://api-takumi.mihoyo.com/game_record/genshin/api/index?server=" + ServerID + "&role_id=" + Uid,
+        url="https://api-takumi.mihoyo.com/game_record/app/genshin/api/index?server=" + ServerID + "&role_id=" + Uid,
         headers={
             'Accept': 'application/json, text/plain, */*',
-            'DS': DSGet(),
+            'DS': DSGet("role_id=" + Uid + "&server=" + ServerID),
             'Origin': 'https://webstatic.mihoyo.com',
             'x-rpc-app_version': mhyVersion,
             'User-Agent': 'Mozilla/5.0 (Linux; Android 9; Unspecified Device) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/39.0.0.0 Mobile Safari/537.36 miHoYoBBS/2.2.0',
@@ -109,12 +164,12 @@ def GetInfo(Uid, ServerID):
     )
     return req.text
 
-def GetBaseInfo(MysId):
+def GetBaseInfo(MysId, ServerID):
     req = requests.get(
         url="https://api-takumi.mihoyo.com/game_record/card/wapi/getGameRecordCard?&uid=" + MysId,
         headers={
             'Accept': 'application/json, text/plain, */*',
-            'DS': DSGet(),
+            'DS': DSGet("role_id=" + Uid + "&server=" + ServerID),
             'Origin': 'https://webstatic.mihoyo.com',
             'x-rpc-app_version': mhyVersion,
             'User-Agent': 'Mozilla/5.0 (Linux; Android 9; Unspecified Device) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/39.0.0.0 Mobile Safari/537.36 miHoYoBBS/2.2.0',
@@ -131,10 +186,10 @@ def GetBaseInfo(MysId):
 def GetCharacter(Uid, ServerID, Character_ids):
     try:
         req = requests.post(
-            url = "https://api-takumi.mihoyo.com/game_record/genshin/api/character",
+            url = "https://api-takumi.mihoyo.com/game_record/app/genshin/api/character",
             headers = {
                 'Accept': 'application/json, text/plain, */*',
-                'DS': DSGet(),
+                'DS': DSGet("role_id=" + Uid + "&server=" + ServerID),
                 'Origin': 'https://webstatic.mihoyo.com',
                 "Cookie": cache_Cookie,#自己获取
                 'x-rpc-app_version': mhyVersion,
@@ -156,10 +211,10 @@ def GetCharacter(Uid, ServerID, Character_ids):
 def GetSpiralAbys(Uid, ServerID, Schedule_type):
     try:
         req = requests.get(
-            url = "https://api-takumi.mihoyo.com/game_record/genshin/api/spiralAbyss?schedule_type=" + Schedule_type + "&server="+ ServerID +"&role_id=" + Uid,
+            url = "https://api-takumi.mihoyo.com/game_record/app/genshin/api/spiralAbyss?schedule_type=" + Schedule_type + "&server="+ ServerID +"&role_id=" + Uid,
             headers = {
                 'Accept': 'application/json, text/plain, */*',
-                'DS': DSGet(),
+                'DS': DSGet("role_id=" + Uid + "&server=" + ServerID),
                 'Origin': 'https://webstatic.mihoyo.com',
                 "Cookie": cache_Cookie,#自己获取
                 'x-rpc-app_version': mhyVersion,
@@ -244,7 +299,7 @@ def JsonAnalysis(JsonText,Uid, ServerID, level, nickname):
         
         Character_ids +=  [i["id"]]
         name_length.append(calcStringLength(i["name"]))
-    dataC = json.loads(GetCharacter(Uid, ServerID, Character_ids)) 
+    dataC = json.loads(request_data(uid=Uid, api='character', character_ids=Character_ids))
     Character_datas = dataC["data"]["avatars"]
     namelength_max = int(max(name_length))
     
@@ -253,6 +308,9 @@ def JsonAnalysis(JsonText,Uid, ServerID, level, nickname):
     need_middle = math.ceil(characternum/6)
     middle_height = need_middle*390
     img_height = middle_height+1024
+    #命之座及好感度
+    PLAYER = os.path.join(FILE_PATH,'player_info')
+    FETTER = os.path.join(FILE_PATH,'fetter')
     #背景图片初始化
     IMG_PATH = os.path.join(FILE_PATH,'images')
     im = Image.new("RGB", (1454, img_height), (255, 255, 255))
@@ -628,12 +686,15 @@ def JsonAnalysis(JsonText,Uid, ServerID, level, nickname):
         dtbox = (z_left, z_top)
         im.paste(img, dtbox, mask=img.split()[3])
         
+        
         #插入角色命座
         line = str(i["actived_constellation_num"])
-        font = ImageFont.truetype(FONTS_PATH, 26)
-        mz_left = z_left + 178
-        mz_top = z_top + 7
-        draw.text((mz_left, mz_top), line, font=font, fill = (0, 0, 0))
+        i_con = Image.open(os.path.join(PLAYER, f'命之座{line}.png'))
+        i_con = i_con.resize((43, 43))
+        mz_left = z_left + 158
+        mz_top = z_top
+        mzbox = (mz_left, mz_top)
+        im.paste(i_con, mzbox, mask=i_con.split()[3])
         
         #插入角色属性
         elementname = str(i["element"]) +".png"
@@ -661,11 +722,13 @@ def JsonAnalysis(JsonText,Uid, ServerID, level, nickname):
         draw.text((level_left, level_top), line, font=font, fill = (0, 0, 0))
         
         #插入角色好感度
-        line = "♥ " + spaceWrap(str(i["fetter"]), 2)
-        font = ImageFont.truetype(FONTS_PATH, 26)
-        fetter_left = z_left + 120
-        fetter_top = z_top + 250
-        draw.text((fetter_left, fetter_top), line, font=font, fill = (0, 0, 0))
+        line = str(i["fetter"])
+        i_fet = Image.open(os.path.join(FETTER, f'好感度{line}.png'))
+        i_fet = i_fet.resize((45, 45))
+        fetter_left = z_left + 135
+        fetter_top = z_top + 242
+        fetterbox = (fetter_left, fetter_top)
+        im.paste(i_fet, fetterbox, mask=i_fet.split()[3])
         
         #插入武器图片
         weaponname = str(weapon["name"]) +".png"
@@ -720,41 +783,41 @@ async def genshin(bot, ev: CQEvent):
         return
     level = 0
     nickname = sender["card"] or sender["nickname"]
-    if '米游社' in msg:
-        userinfo = json.loads(GetBaseInfo(uid))
-        gamelist = userinfo['data']['list']
-        for item in gamelist:
-            if item['game_id']==2:
-                uid = item['game_role_id']
-                level = item['level']
-                nickname = item['nickname']
-                break
-        if int(level)<1:
-            await bot.send(ev, '米游社ID有误！\n请检查输入的米游社ID是否绑定了原神账号！', at_sender=True)
-            return
-    else:
-        if (len(uid) != 9):
-            userinfo = json.loads(GetBaseInfo(uid))
-            gamelist = userinfo['data']['list']
-            for item in gamelist:
-                if item['game_id']==2:
-                    uid = item['game_role_id']
-                    level = item['level']
-                    nickname = item['nickname']
-                    break
-            if int(level)<1:
-                await bot.send(ev, 'UID有误！\n请检查输入的UID是否正确！', at_sender=True)
-                return
+    # if '米游社' in msg:
+        # userinfo = json.loads(GetBaseInfo(uid))
+        # gamelist = userinfo['data']['list']
+        # for item in gamelist:
+            # if item['game_id']==2:
+                # uid = item['game_role_id']
+                # level = item['level']
+                # nickname = item['nickname']
+                # break
+        # if int(level)<1:
+            # await bot.send(ev, '米游社ID有误！\n请检查输入的米游社ID是否绑定了原神账号！', at_sender=True)
+            # return
+    # else:
+        # if (len(uid) != 9):
+            # userinfo = json.loads(GetBaseInfo(uid))
+            # gamelist = userinfo['data']['list']
+            # for item in gamelist:
+                # if item['game_id']==2:
+                    # uid = item['game_role_id']
+                    # level = item['level']
+                    # nickname = item['nickname']
+                    # break
+            # if int(level)<1:
+                # await bot.send(ev, 'UID有误！\n请检查输入的UID是否正确！', at_sender=True)
+                # return
     if (len(uid) == 9):
         if (uid[0] == "1"):
             sv.logger.info('原神查询uid中')
             await bot.send(ev,'原神查询uid中')
-            mes = JsonAnalysis(GetInfo(uid, "cn_gf01"), uid, "cn_gf01", level, nickname)
+            mes = JsonAnalysis(request_data(uid=uid), uid, "cn_gf01", level, nickname)
             await bot.send(ev, mes, at_sender=True)
             #await bot.send_group_forward_msg(group_id=ev['group_id'], messages=tas_list)
         elif (uid[0] == "5"):
             sv.logger.info('原神查询uid中')
-            mes = JsonAnalysis(GetInfo(uid, "cn_qd01"), uid, "cn_qd01", level, nickname)
+            mes = JsonAnalysis(request_data(uid=uid), uid, "cn_qd01", level, nickname)
             await bot.send(ev, mes, at_sender=True)
             #await bot.send_group_forward_msg(group_id=ev['group_id'], messages=tes_list)
         else:
